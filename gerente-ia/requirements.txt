@@ -1,0 +1,4 @@
+langchain
+langgraph
+google-cloud-aiplatform
+neo4j
