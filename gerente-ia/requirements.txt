@@ -1,4 +1,5 @@
 langchain
 langgraph
+langchain-google-vertexai
 google-cloud-aiplatform
 neo4j
