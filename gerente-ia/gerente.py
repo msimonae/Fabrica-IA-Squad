@@ -1,31 +1,42 @@
+from langchain_google_vertexai import ChatVertexAI
 from langgraph.graph import StateGraph
+from typing import TypedDict
 
-# 1. O Gerente define o que é a "Prancheta de Trabalho" (Estado)
-# A prancheta vai guardar o código, os erros e a aprovação.
+# 1. Definir a prancheta de trabalho (Estado do LangGraph)
+class Prancheta(TypedDict):
+    estoria_usuario: str
+    plano_tecnico: str
 
-# 2. O Gerente cria os departamentos (Nós/Nodes)
-def departamento_arquiteto(prancheta):
-    # Lê a estória e planeja
-    return plano
+# 2. Conectar ao Gemini 2.5 Flash (Custo Zero de Hospedagem)
+# O Google Cloud Run já sabe automaticamente em qual projeto está devido ao passo 2, 
+# então você só precisa informar o nome do modelo.
+llm_gemini = ChatVertexAI(
+    model_name="gemini-2.5-flash",
+    temperature=0.1 # Temperatura baixa (0.1) deixa a IA focada na lógica e precisão para código
+)
 
-def departamento_programador(prancheta):
-    # Escreve o código
-    return codigo
+# 3. Criar o departamento do Arquiteto (Nó)
+def departamento_arquiteto(estado: Prancheta):
+    estoria = estado["estoria_usuario"]
+    
+    # A instrução que o Agente vai receber
+    prompt = f"Você é um Arquiteto de Software Sênior. Escreva um plano técnico para a estória: {estoria}"
+    
+    # O Gemini analisa o prompt, processa o raciocínio lógico e devolve a resposta
+    resposta = llm_gemini.invoke(prompt)
+    
+    # Anota o resultado de volta na prancheta
+    return {"plano_tecnico": resposta.content}
 
-def departamento_revisor(prancheta):
-    # Avalia a segurança
-    return relatorio_de_erros
-
-# 3. O Gerente desenha o Fluxograma (Grafo)
+# 4. Montar o fluxo do LangGraph
 fluxograma = StateGraph(Prancheta)
 
+# Adiciona a "mesa" de trabalho do Arquiteto
 fluxograma.add_node("Arquiteto", departamento_arquiteto)
-fluxograma.add_node("Programador", departamento_programador)
-fluxograma.add_node("Revisor", departamento_revisor)
 
-# 4. O Gerente define a ordem das mesas (Arestas/Edges)
-fluxograma.add_edge("Arquiteto", "Programador")
-fluxograma.add_edge("Programador", "Revisor")
+# Define onde o processo começa e termina
+fluxograma.set_entry_point("Arquiteto")
+fluxograma.set_finish_point("Arquiteto")
 
-# 5. A regra condicional: Se o Revisor achar erro, devolve pro Programador. Se não, finaliza.
-# (Isso cria o loop de correção automática)
+# Compila o gerente para ele ficar pronto para rodar e receber as requisições do webhook
+gerente_oficial = fluxograma.compile()
