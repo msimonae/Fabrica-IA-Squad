@@ -9,4 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Expõe a variável PORT padrão do Cloud Run
+ENV PORT=8080
+
 CMD ["python", "gerente.py"]
+
