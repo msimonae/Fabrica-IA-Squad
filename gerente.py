@@ -19,13 +19,13 @@ class Prancheta(TypedDict):
     aprovado: bool
 
 # ==========================================
-# 2. O CÉREBRO: GEMINI FLASH (com project e location explícitos)
+# 2. O CÉREBRO: GEMINI FLASH (Corrigido com versão exata)
 # ==========================================
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "fabrica-ia-squad-510502")
 REGION = os.environ.get("GOOGLE_CLOUD_REGION", "us-central1")
 
 llm_cerebro = ChatVertexAI(
-    model_name="gemini-1.5-flash",
+    model_name="gemini-1.5-flash-001", # <- SUFIXO -001 ADICIONADO AQUI
     project=PROJECT_ID,
     location=REGION,
     temperature=0.1
