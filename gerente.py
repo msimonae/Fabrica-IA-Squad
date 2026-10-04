@@ -19,10 +19,15 @@ class Prancheta(TypedDict):
     aprovado: bool
 
 # ==========================================
-# 2. O CÉREBRO: GEMINI 1.5 FLASH
+# 2. O CÉREBRO: GEMINI FLASH (com project e location explícitos)
 # ==========================================
+PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "fabrica-ia-squad-510502")
+REGION = os.environ.get("GOOGLE_CLOUD_REGION", "us-central1")
+
 llm_cerebro = ChatVertexAI(
     model_name="gemini-1.5-flash",
+    project=PROJECT_ID,
+    location=REGION,
     temperature=0.1
 )
 
@@ -117,4 +122,4 @@ def executar_fluxo(requisicao: TarefaRequest):
 
 if __name__ == "__main__":
     porta = int(os.environ.get("PORT", 8080))
-    uvicorn.run("gerente:app", host="0.0.0.0", port=porta)
+    uvicorn.run(app, host="0.0.0.0", port=porta)
