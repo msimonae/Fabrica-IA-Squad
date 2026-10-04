@@ -19,7 +19,7 @@ class Prancheta(TypedDict):
 # 2. O CÉREBRO: GEMINI 3.8 FLASH (Interino)
 # ==========================================
 llm_cerebro = ChatVertexAI(
-    model_name="gemini-3.8-flash",
+    model_name="gemini-3.6-flash",
     temperature=0.1 
 )
 
