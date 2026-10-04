@@ -1,9 +1,6 @@
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
-# Importação para o modelo nativo do Google
 from langchain_google_vertexai import ChatVertexAI
-# Quando for voltar para o Claude, você usará: 
-# from langchain_google_vertexai import ChatAnthropicVertex
 
 # ==========================================
 # 1. A PRANCHETA DE TRABALHO (ESTADO)
@@ -16,20 +13,12 @@ class Prancheta(TypedDict):
     aprovado: bool
 
 # ==========================================
-# 2. O CÉREBRO: GEMINI 3.8 FLASH (Interino)
+# 2. O CÉREBRO: GEMINI FLASH (Corrigido para gemini-1.5-flash)
 # ==========================================
 llm_cerebro = ChatVertexAI(
-    model_name="gemini-3.6-flash",
-    temperature=0.1 
+    model_name="gemini-1.5-flash",
+    temperature=0.1
 )
-
-# Quando a quota do Claude for liberada, substitua o bloco acima por:
-# llm_cerebro = ChatAnthropicVertex(
-#     model_name="claude-5-5-sonnet",
-#     project="SEU_PROJETO",
-#     location="us-central1",
-#     temperature=0.1
-# )
 
 # ==========================================
 # 3. OS DEPARTAMENTOS (NÓS DA FÁBRICA)
@@ -70,7 +59,7 @@ def departamento_revisor(estado: Prancheta):
 # 4. A REGRA DE CONTROLE DE QUALIDADE
 # ==========================================
 def decidir_proximo_passo(estado: Prancheta):
-    if estado["aprovado"] == True:
+    if estado.get("aprovado") is True:
         return "Finalizar"
     else:
         print("🔄 Devolvendo para o Programador refazer...")
@@ -87,7 +76,11 @@ fluxograma.add_node("Revisor", departamento_revisor)
 fluxograma.set_entry_point("Arquiteto")
 fluxograma.add_edge("Arquiteto", "Programador")
 fluxograma.add_edge("Programador", "Revisor")
-fluxograma.add_conditional_edges("Revisor", decidir_proximo_passo, {"Refazer": "Programador", "Finalizar": END})
+fluxograma.add_conditional_edges(
+    "Revisor",
+    decidir_proximo_passo,
+    {"Refazer": "Programador", "Finalizar": END}
+)
 
 gerente_oficial = fluxograma.compile()
 
