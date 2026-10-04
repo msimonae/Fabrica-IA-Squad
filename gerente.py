@@ -1,4 +1,5 @@
 import os
+import requests # <-- NOVA IMPORTAÇÃO
 from typing import TypedDict
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -25,7 +26,7 @@ PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "fabrica-ia-squad-510502")
 REGION = os.environ.get("GOOGLE_CLOUD_REGION", "us-central1")
 
 llm_cerebro = ChatVertexAI(
-    model_name="gemini-2.5-flash", # <- NOME OFICIAL ATUALIZADO AQUI
+    model_name="gemini-2.5-flash", 
     project=PROJECT_ID,
     location=REGION,
     temperature=0.1
@@ -96,10 +97,12 @@ fluxograma.add_conditional_edges(
 gerente_oficial = fluxograma.compile()
 
 # ==========================================
-# 6. ENDPOINTS HTTP PARA O CLOUD RUN
+# 6. ENDPOINTS HTTP PARA O CLOUD RUN (ATUALIZADO)
 # ==========================================
 class TarefaRequest(BaseModel):
     estoria_usuario: str
+    numero_pr: str = None  # <-- NOVA VARIÁVEL PARA O PR
+    repositorio: str = "msimonae/Fabrica-IA-Squad"
 
 @app.get("/")
 def health_check():
@@ -112,6 +115,25 @@ def executar_fluxo(requisicao: TarefaRequest):
             "estoria_usuario": requisicao.estoria_usuario,
             "aprovado": False
         })
+        
+        # --- ENVIO AUTOMÁTICO PARA O GITHUB ---
+        if requisicao.numero_pr:
+            token = os.environ.get("GITHUB_TOKEN")
+            if token:
+                url_github = f"https://api.github.com/repos/{requisicao.repositorio}/issues/{requisicao.numero_pr}/comments"
+                cabecalhos = {
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github.v3+json"
+                }
+                icone = "✅ APROVADO" if resultado.get("aprovado") else "❌ FALHAS ENCONTRADAS"
+                comentario = f"### 🕵️ Parecer do Agente Revisor\n**Status:** {icone}\n\n**Detalhes da Análise:**\n{resultado.get('comentarios_revisor')}"
+                
+                resposta_git = requests.post(url_github, json={"body": comentario}, headers=cabecalhos)
+                print(f"Status do envio para o GitHub: {resposta_git.status_code}")
+            else:
+                print("Aviso: GITHUB_TOKEN não encontrado nas variáveis de ambiente.")
+        # --------------------------------------
+
         return {
             "plano_tecnico": resultado.get("plano_tecnico"),
             "codigo_gerado": resultado.get("codigo_gerado"),
