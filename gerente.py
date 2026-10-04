@@ -1,6 +1,12 @@
+import os
 from typing import TypedDict
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import uvicorn
 from langgraph.graph import StateGraph, END
 from langchain_google_vertexai import ChatVertexAI
+
+app = FastAPI(title="Gerente Orquestrador IA")
 
 # ==========================================
 # 1. A PRANCHETA DE TRABALHO (ESTADO)
@@ -13,7 +19,7 @@ class Prancheta(TypedDict):
     aprovado: bool
 
 # ==========================================
-# 2. O CÉREBRO: GEMINI FLASH (Corrigido para gemini-1.5-flash)
+# 2. O CÉREBRO: GEMINI 1.5 FLASH
 # ==========================================
 llm_cerebro = ChatVertexAI(
     model_name="gemini-1.5-flash",
@@ -85,10 +91,30 @@ fluxograma.add_conditional_edges(
 gerente_oficial = fluxograma.compile()
 
 # ==========================================
-# 6. SIMULADOR DE TESTE
+# 6. ENDPOINTS HTTP PARA O CLOUD RUN
 # ==========================================
+class TarefaRequest(BaseModel):
+    estoria_usuario: str
+
+@app.get("/")
+def health_check():
+    return {"status": "ok", "servico": "Gerente Orquestrador IA"}
+
+@app.post("/executar")
+def executar_fluxo(requisicao: TarefaRequest):
+    try:
+        resultado = gerente_oficial.invoke({
+            "estoria_usuario": requisicao.estoria_usuario,
+            "aprovado": False
+        })
+        return {
+            "plano_tecnico": resultado.get("plano_tecnico"),
+            "codigo_gerado": resultado.get("codigo_gerado"),
+            "aprovado": resultado.get("aprovado")
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
-    print("\n🚀 INICIANDO TESTE COM GEMINI...\n")
-    tarefa_teste = "Criar uma função em Python para calcular o IMC (Índice de Massa Corporal) e retornar se a pessoa está no peso ideal."
-    resultado = gerente_oficial.invoke({"estoria_usuario": tarefa_teste, "aprovado": False})
-    print("\n📦 PRODUTO FINAL ENTREGUE:\n", resultado["codigo_gerado"])
+    porta = int(os.environ.get("PORT", 8080))
+    uvicorn.run("gerente:app", host="0.0.0.0", port=porta)
