@@ -1,6 +1,5 @@
 FROM python:3.10-slim
 
-# Evita que o Python faça buffer dos logs, permitindo ver os prints em tempo real
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
