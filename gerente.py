@@ -1,5 +1,5 @@
 import os
-import requests # <-- NOVA IMPORTAÇÃO
+import requests
 from typing import TypedDict
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -97,11 +97,11 @@ fluxograma.add_conditional_edges(
 gerente_oficial = fluxograma.compile()
 
 # ==========================================
-# 6. ENDPOINTS HTTP PARA O CLOUD RUN (ATUALIZADO)
+# 6. ENDPOINTS HTTP PARA O CLOUD RUN
 # ==========================================
 class TarefaRequest(BaseModel):
     estoria_usuario: str
-    numero_pr: str = None  # <-- NOVA VARIÁVEL PARA O PR
+    numero_pr: str = None
     repositorio: str = "msimonae/Fabrica-IA-Squad"
 
 @app.get("/")
@@ -115,30 +115,49 @@ def executar_fluxo(requisicao: TarefaRequest):
             "estoria_usuario": requisicao.estoria_usuario,
             "aprovado": False
         })
-        
-        # --- ENVIO AUTOMÁTICO PARA O GITHUB ---
-        if requisicao.numero_pr:
-            token = os.environ.get("GITHUB_TOKEN")
-            if token:
-                url_github = f"https://api.github.com/repos/{requisicao.repositorio}/issues/{requisicao.numero_pr}/comments"
-                cabecalhos = {
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github.v3+json"
-                }
-                icone = "✅ APROVADO" if resultado.get("aprovado") else "❌ FALHAS ENCONTRADAS"
-                comentario = f"### 🕵️ Parecer do Agente Revisor\n**Status:** {icone}\n\n**Detalhes da Análise:**\n{resultado.get('comentarios_revisor')}"
-                
-                resposta_git = requests.post(url_github, json={"body": comentario}, headers=cabecalhos)
-                print(f"Status do envio para o GitHub: {resposta_git.status_code}")
-            else:
-                print("Aviso: GITHUB_TOKEN não encontrado nas variáveis de ambiente.")
-        # --------------------------------------
-
         return {
             "plano_tecnico": resultado.get("plano_tecnico"),
             "codigo_gerado": resultado.get("codigo_gerado"),
             "aprovado": resultado.get("aprovado")
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/revisar_pr")
+def revisar_pr_direto(requisicao: TarefaRequest):
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token or not requisicao.numero_pr:
+        raise HTTPException(status_code=400, detail="Token ou número do PR ausentes.")
+        
+    try:
+        # 1. Puxar o código do GitHub (formato DIFF)
+        url_diff = f"https://api.github.com/repos/{requisicao.repositorio}/pulls/{requisicao.numero_pr}"
+        cabecalhos_diff = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3.diff"}
+        resposta_diff = requests.get(url_diff, headers=cabecalhos_diff)
+        codigo_alterado = resposta_diff.text
+        
+        # 2. Mandar o LLM revisar o código real
+        prompt = f"""Você é um Inspetor de Segurança Sênior (AppSec).
+        Analise o seguinte 'git diff' (linhas com + foram adicionadas) e busque vulnerabilidades críticas (ex: eval, senhas expostas, injeções).
+        
+        Código Alterado no PR:
+        {codigo_alterado}
+        
+        Se o código for perfeitamente seguro, responda apenas a palavra 'APROVADO'. 
+        Se contiver falhas, não use a palavra aprovado. Explique o risco detalhadamente e mostre como corrigir."""
+        
+        parecer = llm_cerebro.invoke(prompt).content
+        aprovado = "APROVADO" in parecer.upper()
+        
+        # 3. Postar o resultado de volta no GitHub
+        url_comentario = f"https://api.github.com/repos/{requisicao.repositorio}/issues/{requisicao.numero_pr}/comments"
+        cabecalhos_comentario = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
+        icone = "✅ APROVADO" if aprovado else "❌ FALHAS DE SEGURANÇA ENCONTRADAS"
+        comentario_final = f"### 🕵️ Parecer do Agente Revisor\n**Status:** {icone}\n\n**Detalhes da Análise do Código:**\n{parecer}"
+        
+        requests.post(url_comentario, json={"body": comentario_final}, headers=cabecalhos_comentario)
+        
+        return {"status": "revisado", "aprovado": aprovado}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
