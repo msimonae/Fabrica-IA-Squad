@@ -1,80 +1,135 @@
 import os
-import ast  # <-- AGORA SIM! Adicionamos a analise estatica de AST
+import ast
 import requests
-from typing import TypedDict
+from typing import TypedDict, List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
 from langgraph.graph import StateGraph, END
-from langchain_google_vertexai import ChatVertexAI  # Corrigido o import
+from langchain_google_vertexai import ChatVertexAI
 
-app = FastAPI(title="Gerente Orquestrador IA - V3 (QA + AppSec com XAI Real)")
+app = FastAPI(title="Gerente Orquestrador IA - V3 (Advanced QA & AST AppSec)")
 
 # ==========================================
 # 1. A PRANCHETA DE TRABALHO (ESTADO)
 # ==========================================
 class Prancheta(TypedDict):
-    estoria_usuario: str       # Corrigido snake_case
-    plano_tecnico: str         # Corrigido
-    codigo_gerado: str         # Corrigido
-    testes_gerados: str        # Nova variavel de estado para QA
+    estoria_usuario: str
+    plano_tecnico: str
+    codigo_gerado: str
+    testes_gerados: str
     comentarios_revisor: str
     aprovado: bool
-    analise_estatica_ast: str  # <-- Rastreabilidade XAI real para o estado
+    analise_estatica_ast: str
 
-# ==========================================
-# AUXILIAR: ANALISADOR ESTÁTICO DE AST (O MÓDULO XAI)
-# ==========================================
-def executar_analise_estatica_ast(codigo: str) -> str:
-    """
-    Extrai a AST do codigo e busca de forma deterministica por padroes vulneraveis,
-    fornecendo a rastreabilidade exata (XAI) de linhas e nos para o LLM.
-    """
-    if not codigo:
-        return "Nenhum codigo disponivel para analise estatica."
-        
-    vulnerabilidades_encontradas = []
-    try:
-        # Faz o parsing do codigo bruto em uma arvore de sintaxe abstrata
-        tree = ast.parse(codigo)
-        
-        # Percorre todos os nos da arvore
-        for node in ast.walk(tree):
-            # 1. Busca por chamadas de funcoes perigosas (e.g. Call: eval)
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name) and node.func.id == 'eval':
-                    vulnerabilidades_encontradas.append(
-                        f"[AST Call: eval()] detectada na Linha {node.lineno}. "
-                        "Risco: Execucao de codigo arbitrario (Code Injection)."
-                    )
+# =========================================================================
+# 2. O MÓDULO XAI DE ANÁLISE ESTÁTICA AVANÇADA (SAST DETERMINÍSTICO COM AST)
+# =========================================================================
+class ASTSecurityScanner(ast.NodeVisitor):
+    def __init__(self):
+        self.vulnerabilidades: List[str] = []
+
+    def visit_Call(self, node: ast.Call):
+        # 1. Busca por Code Injection (Call: eval, exec, input)
+        if isinstance(node.func, ast.Name):
+            func_name = node.func.id
+            if func_name in ['eval', 'exec', 'input']:
+                self.vulnerabilidades.append(
+                    f"🛑 [A03:2021-Injection] Chamada perigosa '{func_name}()' na Linha {node.lineno}. "
+                    "Risco: Execução de código arbitrário e não confiável."
+                )
             
-            # 2. Busca por atribuicoes suspeitas de credenciais (e.g. Assign: USUARIO_CORRETO, SENHA)
-            elif isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        nome_var = target.id.upper()
-                        if any(pat in nome_var for pat in ["PASSWORD", "SENHA", "SECRET", "CREDENTIAL", "TOKEN"]):
-                            # Se o valor atribuido for uma string constante, ha risco de hardcode
-                            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                                vulnerabilidades_encontradas.append(
-                                    f"[AST Assign: {target.id}] detectada na Linha {node.lineno}. "
-                                    f"Valor estatico: '{node.value.value[:4]}...'. "
-                                    "Risco: Credenciais expostas no codigo-fonte (OWASP A02:2021)."
-                                )
-                                
-        if vulnerabilidades_encontradas:
-            return "RESULTADOS DO ANALISADOR ESTÁTICO AST (XAI Real):\n" + "\n".join(vulnerabilidades_encontradas)
-        return "RESULTADOS DO ANALISADOR ESTÁTICO AST: Nenhuma inconformidade deterministica encontrada na AST."
+            # 2. Injeção de Comando de Sistema (os.system, os.popen, etc.)
+            if func_name in ['system', 'popen'] or (isinstance(node.func, ast.Attribute) and node.func.attr in ['system', 'popen']):
+                self.vulnerabilidades.append(
+                    f"🛑 [A03:2021-Injection] Chamada 'os.{func_name if isinstance(node.func, ast.Name) else node.func.attr}()' na Linha {node.lineno}. "
+                    "Risco: Execução de comandos do sistema operacional (Command Injection)."
+                )
+
+        # 3. Injeção de Comando via Subprocess (shell=True)
+        elif isinstance(node.func, ast.Attribute):
+            if node.func.attr in ['Popen', 'run', 'call', 'check_output']:
+                # Analisa se foi passado o parâmetro shell=True
+                for keyword in node.keywords:
+                    if keyword.arg == 'shell':
+                        if isinstance(keyword.value, ast.Constant) and keyword.value.value is True:
+                            self.vulnerabilidades.append(
+                                f"🛑 [A03:2021-Injection] Uso de 'subprocess.{node.func.attr}(shell=True)' na Linha {node.lineno}. "
+                                "Risco: Criação de subprocesso vulnerável a Shell Injection."
+                            )
+
+            # 4. Desserialização Insegura (pickle, marshal, yaml)
+            if isinstance(node.func.value, ast.Name) and node.func.value.id in ['pickle', 'marshal', 'yaml', 'shelve']:
+                if node.func.attr in ['loads', 'load', 'unsafe_load']:
+                    # Exceção para yaml se usar safe_load
+                    if not (node.func.value.id == 'yaml' and node.func.attr == 'safe_load'):
+                        self.vulnerabilidades.append(
+                            f"🛑 [A08:2021-Integridade] Desserialização insegura '{node.func.value.id}.{node.func.attr}()' na Linha {node.lineno}. "
+                            "Risco: Deserialização de dados não confiáveis pode levar à execução de código remoto (RCE)."
+                        )
+
+            # 5. Criptografia / Hashes Fracos
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == 'hashlib':
+                if node.func.attr in ['md5', 'sha1']:
+                    self.vulnerabilidades.append(
+                        f"⚠️ [A02:2021-Criptografia] Algoritmo de hash fraco 'hashlib.{node.func.attr}()' na Linha {node.lineno}. "
+                        "Risco: Algoritmo suscetível a colisões. Use SHA-256 ou superior."
+                    )
+
+            # 6. Risco de SQL Injection
+            # Procura por métodos como .execute() que realizem interpolação de strings
+            if node.func.attr in ['execute', 'executemany']:
+                if node.args:
+                    primeiro_arg = node.args[0]
+                    # Se o primeiro argumento da consulta for f-string, concatenação ou .format()
+                    if (isinstance(primeiro_arg, ast.JoinedStr) or 
+                        (isinstance(primeiro_arg, ast.BinOp) and isinstance(primeiro_arg.op, ast.Mod)) or
+                        (isinstance(primeiro_arg, ast.Call) and isinstance(primeiro_arg.func, ast.Attribute) and primeiro_arg.func.attr == 'format')):
+                        self.vulnerabilidades.append(
+                            f"🛑 [A03:2021-Injection] Potencial SQL Injection na Linha {node.lineno} (chamada '.{node.func.attr}()'). "
+                            "Risco: Consulta SQL construída dinamicamente com interpolação ou concatenação de strings. Utilize consultas parametrizadas."
+                        )
+
+        self.generic_visit(node)
+
+    def visit_Assign(self, node: ast.Assign):
+        # 7. Busca por Vazamento de Dados Sensíveis (Credenciais/Tokens)
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                var_name = target.id.upper()
+                # Verifica se o nome da variável é sensível e possui valor de string constante
+                if any(k in var_name for k in ["PASSWORD", "SENHA", "SECRET", "CREDENTIAL", "TOKEN", "API_KEY", "JWT"]):
+                    if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                        # Desconsidera strings de placeholders óbvias
+                        if len(node.value.value) > 4 and not any(p in node.value.value.upper() for p in ["YOUR", "ENV", "PLACEHOLDER", "INSERT"]):
+                            self.vulnerabilidades.append(
+                                f"🛑 [A02:2021-Criptografia] Vazamento de Dados Sensíveis na Linha {node.lineno}. "
+                                f"A variável '{target.id}' aparenta conter um valor confidencial estático (hardcoded)."
+                            )
+        self.generic_visit(node)
+
+def executar_analise_estatica_ast(codigo: str) -> str:
+    if not codigo:
+        return "Nenhum código disponível para análise estática."
+    try:
+        # Resolve markdown ou blocos de código
+        codigo_limpo = codigo.replace("```python", "").replace("```", "")
+        tree = ast.parse(codigo_limpo)
+        scanner = ASTSecurityScanner()
+        scanner.visit(tree)
         
+        if scanner.vulnerabilidades:
+            return "RESULTADOS DO ANALISADOR ESTÁTICO AST (XAI Real):\n" + "\n".join(scanner.vulnerabilidades)
+        return "RESULTADOS DO ANALISADOR ESTÁTICO AST: Nenhuma inconformidade determinística encontrada na AST."
     except SyntaxError as e:
         return f"Erro de sintaxe ao gerar a AST (Linha {e.lineno}): {e.msg}"
     except Exception as e:
         return f"Falha no processamento da AST: {str(e)}"
 
 # ==========================================
-# 2. O CÉREBRO: GEMINI 2.5 FLASH
+# 3. O CÉREBRO: GEMINI 2.5 FLASH
 # ==========================================
-PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "fabrica-ia-squad-510502") # Corrigido variable naming
+PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "fabrica-ia-squad-510502")
 REGION = os.environ.get("GOOGLE_CLOUD_REGION", "us-central1")
 
 llm_cerebro = ChatVertexAI(
@@ -85,7 +140,7 @@ llm_cerebro = ChatVertexAI(
 )
 
 # ==========================================
-# 3. OS DEPARTAMENTOS (NÓS DA FÁBRICA)
+# 4. OS DEPARTAMENTOS (NÓS DA FÁBRICA)
 # ==========================================
 def departamento_arquiteto(estado: Prancheta):
     print("👷 [Arquiteto] Planejando a solução...")
@@ -98,8 +153,7 @@ def departamento_programador(estado: Prancheta):
     prompt = f"""Você é um Desenvolvedor Sênior. 
     Plano: {estado['plano_tecnico']}
     Erros para corrigir das tentativas anteriores: {estado.get('comentarios_revisor', 'Nenhum.')}
-    Escreva APENAS o código final, sem explicações adicionais ou Markdown redundante fora do bloco de codigo."""
-    
+    Escreva APENAS o código final, sem explicações adicionais."""
     resposta = llm_cerebro.invoke(prompt)
     return {"codigo_gerado": resposta.content}
 
@@ -111,18 +165,17 @@ def departamento_qa(estado: Prancheta):
 
     Gere testes que cubram os caminhos felizes, casos de borda e validação de exceções.
     Retorne APENAS o código de testes, sem explicações adicionais."""
-
     resposta = llm_cerebro.invoke(prompt)
     return {"testes_gerados": resposta.content}
 
 def departamento_revisor(estado: Prancheta):
     print("🕵️ [Revisor AppSec] Auditoria de Segurança e Qualidade...")
     
-    # Executa a AST para injetar na revisao
+    # Executa a AST para injetar na revisão
     analise_ast = executar_analise_estatica_ast(estado['codigo_gerado'])
     
     prompt = f"""Você é um Especialista de Segurança de Aplicações (AppSec) e Tech Lead. 
-    Audite a implementação principal e os testes gerados, considerando o relatório da analise estatica AST.
+    Audite a implementação principal e os testes gerados, considerando o relatório da análise estática AST.
 
     Código Principal: 
     {estado['codigo_gerado']}
@@ -134,16 +187,17 @@ def departamento_revisor(estado: Prancheta):
     {analise_ast}
 
     Regras de Validação de AppSec e Qualidade:
-    1. OWASP Top 10: Busque ativamente por injeções, senhas hardcoded ou logs sensíveis.
+    1. OWASP Top 10: Busque ativamente por injeções (SQL, Command, eval), XSS, senhas hardcoded ou logs sensíveis.
     2. Com base na AST fornecida, aponte as linhas exatas e o tipo de nó (ex: Call, Assign) que contêm riscos.
     3. Tratamento de Exceções: O código lida com erros de forma segura sem expor a stack trace?
+    4. Qualidade da Cobertura: Os testes unitários provam que o código bloqueia inputs maliciosos?
 
-    Se TUDO estiver perfeitamente seguro e bem testado, responda APENAS a palavra 'APROVADO'.
-    Se encontrar falhas, NÃO use a palavra APROVADO. Forneça uma explicação técnica embasada da causa raiz da vulnerabilidade, cite os nos e linhas exatas acusados na analise AST e como corrigi-la para que o Programador refaça o trabalho."""
+    Se TUDO estiver perfeitamente seguro e bem testado, e o relatório da AST não acusar inconformidades, responda APENAS a palavra 'APROVADO'.
+    Se encontrar falhas, NÃO use a palavra APROVADO. Forneça uma explicação técnica embasada da causa raiz da vulnerabilidade, cite os nós e linhas exatas acusados na análise AST e como corrigi-la para que o Programador refaça o trabalho."""
 
     resposta = llm_cerebro.invoke(prompt).content
 
-    if "APROVADO" in resposta.upper() and "RESULTADOS DO ANALISADOR" not in analise_ast:
+    if "APROVADO" in resposta.upper() and "🛑" not in analise_ast:
         print("✅ [Revisor] Código e Testes Aprovados!")
         return {"aprovado": True, "comentarios_revisor": "Tudo certo.", "analise_estatica_ast": analise_ast}
     else:
@@ -151,7 +205,7 @@ def departamento_revisor(estado: Prancheta):
         return {"aprovado": False, "comentarios_revisor": resposta, "analise_estatica_ast": analise_ast}
 
 # ==========================================
-# 4. A REGRA DE CONTROLE DE QUALIDADE
+# 5. A REGRA DE CONTROLE DE QUALIDADE
 # ==========================================
 def decidir_proximo_passo(estado: Prancheta):
     if estado.get("aprovado") is True:
@@ -161,7 +215,7 @@ def decidir_proximo_passo(estado: Prancheta):
         return "Refazer"
 
 # ==========================================
-# 5. CONSTRUINDO O FLUXOGRAMA MULTI-AGENTE
+# 6. CONSTRUINDO O FLUXOGRAMA MULTI-AGENTE
 # ==========================================
 fluxograma = StateGraph(Prancheta)
 fluxograma.add_node("Arquiteto", departamento_arquiteto)
@@ -181,21 +235,21 @@ fluxograma.add_conditional_edges(
 gerente_oficial = fluxograma.compile()
 
 # ==========================================
-# 6. ENDPOINTS HTTP PARA O CLOUD RUN
+# 7. ENDPOINTS HTTP PARA O CLOUD RUN
 # ==========================================
 class TarefaRequest(BaseModel):
-    estoria_usuario: str      # Corrigido o nome do campo
-    numero_pr: str = None     # Corrigido o nome do campo
+    estoria_usuario: str
+    numero_pr: str = None
     repositorio: str = "msimonae/Fabrica-IA-Squad"
 
 @app.get("/")
 def health_check():
-    return {"status": "ok", "servico": "Gerente Orquestrador IA v3 - AST Habilitado"}
+    return {"status": "ok", "servico": "Gerente Orquestrador IA v3 - Advanced AppSec AST"}
 
 @app.post("/executar")
 def executar_fluxo(requisicao: TarefaRequest):
     try:
-        configuracao = {"recursion_limit": 8} # Corrigido parametro snake_case
+        configuracao = {"recursion_limit": 8}
         resultado = gerente_oficial.invoke({
             "estoria_usuario": requisicao.estoria_usuario,
             "aprovado": False
@@ -213,9 +267,9 @@ def executar_fluxo(requisicao: TarefaRequest):
             raise HTTPException(status_code=408, detail="A Squad IA entrou em loop de validação AppSec/QA.")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/revisar_pr")  # Corrigido endpoint
+@app.post("/revisar_pr")
 def revisar_pr_direto(requisicao: TarefaRequest):
-    token = os.environ.get("GITHUB_TOKEN") # Corrigido nome da variavel
+    token = os.environ.get("GITHUB_TOKEN")
     if not token or not requisicao.numero_pr:
         raise HTTPException(status_code=400, detail="Token ou número do PR ausentes.")
     
@@ -225,11 +279,11 @@ def revisar_pr_direto(requisicao: TarefaRequest):
         resposta_diff = requests.get(url_diff, headers=cabecalhos_diff)
         codigo_alterado = resposta_diff.text
 
-        # Executa analise real de AST sobre as linhas modificadas
+        # Executa análise de AST
         analise_ast = executar_analise_estatica_ast(codigo_alterado)
 
         prompt_revisor_avancado = f"""Você é um Inspetor de Segurança Sênior (AppSec).
-        Analise o seguinte 'git diff' em busca de vulnerabilidades (OWASP Top 10) e correlacione as falhas com o relatorio de AST se disponivel.
+        Analise o seguinte 'git diff' em busca de vulnerabilidades (OWASP Top 10) e correlacione as falhas com o relatório de AST se disponível.
 
         Código Alterado no PR:
         {codigo_alterado}
@@ -241,7 +295,7 @@ def revisar_pr_direto(requisicao: TarefaRequest):
         Se contiver falhas, use a rastreabilidade do AST (nós, linhas) e sugira a correção."""
 
         parecer = llm_cerebro.invoke(prompt_revisor_avancado).content
-        aprovado = "APROVADO" in parecer.upper() and "RESULTADOS" not in analise_ast
+        aprovado = "APROVADO" in parecer.upper() and "🛑" not in analise_ast
 
         prompt_qa = f"""Baseado no seguinte diff de código, escreva uma suíte de testes unitários em pytest que valide este código:
         {codigo_alterado}
@@ -249,6 +303,7 @@ def revisar_pr_direto(requisicao: TarefaRequest):
 
         testes_sugeridos = llm_cerebro.invoke(prompt_qa).content
 
+        url_comentario = f"https://api.github.com/repos/{requisitorio}/issues/{requisicao.numero_pr}/comments"
         url_comentario = f"https://api.github.com/repos/{requisicao.repositorio}/issues/{requisicao.numero_pr}/comments"
         cabecalhos_comentario = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
         icone = "✅ APROVADO" if aprovado else "❌ FALHAS DE SEGURANÇA ENCONTRADAS"
