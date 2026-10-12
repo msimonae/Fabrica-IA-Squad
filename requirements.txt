@@ -9,5 +9,4 @@ neo4j
 pymilvus
 jira
 PyGithub
-functions-framework==3.0.0
-requests==2.31.0
+requests
