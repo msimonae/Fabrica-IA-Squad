@@ -200,20 +200,30 @@ def departamento_revisor(estado: Prancheta):
     print("🕵️ [Revisor AppSec] Auditoria de Segurança, Qualidade e Integração...")
     analise_hibrida = executar_analise_estatica_hibrida(estado['codigo_backend'], estado['codigo_frontend'])
     
-    prompt = f"""Audite o Backend e Frontend. 
+    prompt = f"""Você é um Tech Lead AppSec.
+    Audite rigorosamente:
     Backend: {estado['codigo_backend']}
     Frontend: {estado['codigo_frontend']}
-    Testes QA: {estado['testes_gerados']}
     Scanner SAST: {analise_hibrida}
 
-    REGRA ZERO-TRUST:
-    Se o Scanner SAST indicar QUALQUER aviso (seja 🛑 ou ⚠️), você DEVE reprovar o código e orientar a correção.
-    Se perfeitamente seguro e sem falhas no SAST, responda APENAS 'APROVADO'. Senão, explique as falhas."""
+    REGRA DE ZERO-TRUST:
+    Você DEVE explicar as falhas detalhadamente e ordenar que os desenvolvedores corrijam a vulnerabilidade.
+    Só responda a palavra 'APROVADO' de forma isolada se o código estiver 100% seguro e o Scanner disser 'Perfeito' para ambos.
+    """
     resposta = get_llm().invoke(prompt).content
 
-    # Alteração: Bloqueio rigoroso de vulnerabilidades amarelas (Warnings)
-    if "APROVADO" in resposta.upper() and "🛑" not in analise_hibrida and "⚠️" not in analise_hibrida:
-        return {"aprovado": True, "comentarios_revisor": "Tudo certo.", "analise_estatica_ast": analise_hibrida}
+    # HARD-STOP: A aprovação depende de duas condições inegociáveis:
+    # 1. O LLM dizer "APROVADO" explicitamente.
+    # 2. O Scanner não conter símbolos de erro (🛑, ❌) nem avisos (⚠️).
+    possui_erros_sast = any(simbolo in analise_hibrida for simbolo in ["🛑", "⚠️", "❌"])
+
+    if "APROVADO" in resposta.upper() and not possui_erros_sast:
+        return {"aprovado": True, "comentarios_revisor": "Aprovado sem ressalvas.", "analise_estatica_ast": analise_hibrida}
+    
+    # Se o LLM disse APROVADO, mas o SAST encontrou erro, nós forçamos a reprovação.
+    if possui_erros_sast and "APROVADO" in resposta.upper():
+        resposta = f"REPROVADO PELO SISTEMA: O Tech Lead IA tentou aprovar, mas o SAST Scanner detectou anomalias inegociáveis:\n{analise_hibrida}\n\nComentários do Tech Lead: {resposta}"
+
     return {"aprovado": False, "comentarios_revisor": resposta, "analise_estatica_ast": analise_hibrida}
 
 def decidir_proximo_passo(estado: Prancheta):
