@@ -1,3 +1,4 @@
+# Importação das bibliotecas
 import os
 import ast
 import re
