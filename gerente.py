@@ -117,10 +117,11 @@ class FrontendSecurityScanner:
 def executar_analise_estatica_hibrida(codigo_backend: str, codigo_frontend: str) -> str:
     relatorio = []
     
-    if codigo_backend and "Nenhum" not in codigo_backend:
+    # 1. Validação do Backend (AST) - Alterado o filtro de checagem
+    if codigo_backend and len(codigo_backend.strip()) > 10: 
         try:
-            codigo_limpo = codigo_backend.replace("```python", "").replace("```", "")
-            tree = ast.parse(codigo_limpo)
+            codigo_limpo_back = codigo_backend.replace("```python", "").replace("```", "")
+            tree = ast.parse(codigo_limpo_back)
             scanner_back = ASTSecurityScanner()
             scanner_back.visit(tree)
             if scanner_back.vulnerabilidades:
@@ -130,23 +131,30 @@ def executar_analise_estatica_hibrida(codigo_backend: str, codigo_frontend: str)
         except SyntaxError as e:
             relatorio.append(f"❌ BACKEND Erro de Sintaxe (Linha {e.lineno}): {e.msg}")
         except Exception as e:
-            relatorio.append(f"❌ BACKEND Falha interna: {str(e)}")
+            relatorio.append(f"❌ BACKEND Falha interna do Scanner AST: {str(e)}")
+    else:
+         relatorio.append("⚠️ BACKEND: Nenhum código processável fornecido.")
             
-    if codigo_frontend and "Nenhum" not in codigo_frontend:
+    # 2. Validação do Frontend (Pattern Matching) - Alterado o filtro e adicionada a limpeza de Markdown
+    if codigo_frontend and len(codigo_frontend.strip()) > 10: 
         try:
+            # NOVA LINHA: Limpeza estrutural para garantir o Pattern Matching
+            codigo_limpo_front = codigo_frontend.replace("```jsx", "").replace("```javascript", "").replace("```html", "").replace("```react", "").replace("```", "")
             scanner_front = FrontendSecurityScanner()
-            scanner_front.scan_code(codigo_frontend)
+            scanner_front.scan_code(codigo_limpo_front)
+            
             if scanner_front.vulnerabilidades:
                 relatorio.append("🎨 FRONTEND (Pattern-Matching):\n" + "\n".join(scanner_front.vulnerabilidades))
             else:
                 relatorio.append("✅ FRONTEND (Pattern-Matching): Nenhuma inconformidade determinística detectada.")
         except Exception as e:
-            relatorio.append(f"❌ FRONTEND Falha interna: {str(e)}")
+            relatorio.append(f"❌ FRONTEND Falha interna do Scanner Regex: {str(e)}")
+    else:
+        relatorio.append("⚠️ FRONTEND: Nenhum código processável fornecido.")
 
     if not relatorio:
          return "Nenhum código para análise."
     return "\n\n".join(relatorio)
-
 
 # ==========================================
 # 4. OS DEPARTAMENTOS (NÓS DA FÁBRICA)
