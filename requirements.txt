@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+langchain-google-vertexai
+langgraph
+langchain-core
+neo4j
+pymilvus
+jira
+PyGithub
+requests
