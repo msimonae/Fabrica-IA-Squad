@@ -275,13 +275,14 @@ def executar_fluxo(requisicao: TarefaRequest):
 @app.post("/revisar_pr")
 def revisar_pr_direto(requisicao: TarefaRequest):
     """
-    Auditoria direta de Pull Requests no GitHub
+    Auditoria direta de Pull Requests no GitHub (DevSecOps)
     """
     token = os.environ.get("GITHUB_TOKEN")
     if not token or not requisicao.numero_pr:
-        raise HTTPException(status_code=400, detail="Token do GitHub ou número do PR ausentes.")
+        raise HTTPException(status_code=400, detail="Token do GitHub ou número do PR ausentes na requisição ou ambiente.")
     
     try:
+        # 1. Busca o Diff (Código Alterado) do GitHub
         url_diff = f"https://api.github.com/repos/{requisicao.repositorio}/pulls/{requisicao.numero_pr}"
         cabecalhos_diff = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3.diff"}
         resposta_diff = requests.get(url_diff, headers=cabecalhos_diff)
@@ -291,39 +292,45 @@ def revisar_pr_direto(requisicao: TarefaRequest):
              
         codigo_alterado = resposta_diff.text
 
+        # 2. Separa apenas as linhas em Python para alimentar o Scanner AST sem quebrar
         linhas_python = [line for line in codigo_alterado.split('\n') if not line.startswith('-') and (line.endswith('.py') or any(k in line for k in ['def ', 'import ', 'class ']))]
         codigo_python_sozinho = "\n".join(linhas_python)
 
+        # 3. Executa o Scanner SAST Determinístico
         analise_hibrida = executar_analise_estatica_hibrida(codigo_python_sozinho, codigo_alterado)
 
-        prompt_revisor_avancado = f"""Você é um Inspetor de Segurança Sênior (AppSec).
-        Analise o 'git diff' recebido.
-
-        Diff:
-        {codigo_alterado}
-
-        SAST Scanner:
-        {analise_hibrida}
-
+        # 4. Avaliação LLM (Tech Lead)
+        prompt_revisor_avancado = f"""Você é um Inspetor AppSec.
+        Analise o diff do PR. Scanner SAST: {analise_hibrida}
+        
         REGRA ZERO-TRUST:
-        Reprove sumariamente se o SAST Scanner apontar qualquer vulnerabilidade grave (🛑) ou aviso de design inseguro (⚠️).
-        Responda 'APROVADO' apenas se o código estiver perfeitamente blindado. Senão, explique as correções."""
-
+        Se houver QUALQUER erro grave (🛑), aviso inseguro (⚠️) ou erro de sintaxe/falha (❌), reprove e explique a correção.
+        Só responda 'APROVADO' de forma isolada se o código estiver perfeitamente blindado."""
+        
         parecer = get_llm().invoke(prompt_revisor_avancado).content
-        aprovado = "APROVADO" in parecer.upper() and "🛑" not in analise_hibrida and "⚠️" not in analise_hibrida
 
-        prompt_qa = f"Crie testes pytest para o diff: {codigo_alterado}"
+        # 5. HARD-STOP: A palavra final é do Python, não da IA
+        possui_erros_sast = any(simbolo in analise_hibrida for simbolo in ["🛑", "⚠️", "❌"])
+        aprovado = "APROVADO" in parecer.upper() and not possui_erros_sast
+
+        # Proteção contra Alucinação: Se a IA aprovou algo com erro, sobrescreve o texto dela
+        if possui_erros_sast and "APROVADO" in parecer.upper():
+            parecer = f"**REPROVADO PELO SISTEMA (HARD-STOP):** O Tech Lead IA tentou aprovar o PR, mas o SAST Scanner detectou anomalias inegociáveis.\n\n**Comentário original da IA:**\n{parecer}"
+
+        # 6. Geração de Testes (QA)
+        prompt_qa = f"Crie testes unitários automáticos usando pytest para o código modificado na PR:\n{codigo_alterado}"
         testes_sugeridos = get_llm().invoke(prompt_qa).content
 
+        # 7. Posta o comentário de volta no PR no GitHub
         url_comentario = f"https://api.github.com/repos/{requisicao.repositorio}/issues/{requisicao.numero_pr}/comments"
         cabecalhos_comentario = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
         icone = "✅ APROVADO" if aprovado else "❌ REPROVADO PELO APPSEC"
 
         comentario_final = (
             f"### 🕵️ Auditoria AppSec (Zero-Trust)\n**Status:** {icone}\n\n"
-            f"**Análise Estática (SAST):\n{analise_hibrida}\n\n"
-            f"**Parecer Técnico (IA):\n{parecer}\n\n"
-            f"---\n### 🧪 Sugestão de Testes Automáticos\n{testes_sugeridos}"
+            f"**Análise Estática (SAST):**\n{analise_hibrida}\n\n"
+            f"**Parecer Técnico (IA):**\n{parecer}\n\n"
+            f"---\n### 🧪 Sugestão de Testes Automáticos (QA)\n{testes_sugeridos}"
         )
 
         resp = requests.post(url_comentario, json={"body": comentario_final}, headers=cabecalhos_comentario)
@@ -331,6 +338,66 @@ def revisar_pr_direto(requisicao: TarefaRequest):
         return {"status": "revisado", "github_status": resp.status_code, "aprovado": aprovado}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# @app.post("/revisar_pr")
+# def revisar_pr_direto(requisicao: TarefaRequest):
+#     """
+#     Auditoria direta de Pull Requests no GitHub
+#     """
+#     token = os.environ.get("GITHUB_TOKEN")
+#     if not token or not requisicao.numero_pr:
+#         raise HTTPException(status_code=400, detail="Token do GitHub ou número do PR ausentes.")
+    
+#     try:
+#         url_diff = f"https://api.github.com/repos/{requisicao.repositorio}/pulls/{requisicao.numero_pr}"
+#         cabecalhos_diff = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3.diff"}
+#         resposta_diff = requests.get(url_diff, headers=cabecalhos_diff)
+        
+#         if resposta_diff.status_code != 200:
+#              raise HTTPException(status_code=404, detail="PR não encontrado ou sem acesso.")
+             
+#         codigo_alterado = resposta_diff.text
+
+#         linhas_python = [line for line in codigo_alterado.split('\n') if not line.startswith('-') and (line.endswith('.py') or any(k in line for k in ['def ', 'import ', 'class ']))]
+#         codigo_python_sozinho = "\n".join(linhas_python)
+
+#         analise_hibrida = executar_analise_estatica_hibrida(codigo_python_sozinho, codigo_alterado)
+
+#         prompt_revisor_avancado = f"""Você é um Inspetor de Segurança Sênior (AppSec).
+#         Analise o 'git diff' recebido.
+
+#         Diff:
+#         {codigo_alterado}
+
+#         SAST Scanner:
+#         {analise_hibrida}
+
+#         REGRA ZERO-TRUST:
+#         Reprove sumariamente se o SAST Scanner apontar qualquer vulnerabilidade grave (🛑) ou aviso de design inseguro (⚠️).
+#         Responda 'APROVADO' apenas se o código estiver perfeitamente blindado. Senão, explique as correções."""
+
+#         parecer = get_llm().invoke(prompt_revisor_avancado).content
+#         aprovado = "APROVADO" in parecer.upper() and "🛑" not in analise_hibrida and "⚠️" not in analise_hibrida
+
+#         prompt_qa = f"Crie testes pytest para o diff: {codigo_alterado}"
+#         testes_sugeridos = get_llm().invoke(prompt_qa).content
+
+#         url_comentario = f"https://api.github.com/repos/{requisicao.repositorio}/issues/{requisicao.numero_pr}/comments"
+#         cabecalhos_comentario = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
+#         icone = "✅ APROVADO" if aprovado else "❌ REPROVADO PELO APPSEC"
+
+#         comentario_final = (
+#             f"### 🕵️ Auditoria AppSec (Zero-Trust)\n**Status:** {icone}\n\n"
+#             f"**Análise Estática (SAST):\n{analise_hibrida}\n\n"
+#             f"**Parecer Técnico (IA):\n{parecer}\n\n"
+#             f"---\n### 🧪 Sugestão de Testes Automáticos\n{testes_sugeridos}"
+#         )
+
+#         resp = requests.post(url_comentario, json={"body": comentario_final}, headers=cabecalhos_comentario)
+        
+#         return {"status": "revisado", "github_status": resp.status_code, "aprovado": aprovado}
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
