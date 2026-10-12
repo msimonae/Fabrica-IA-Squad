@@ -1,4 +1,3 @@
-# Importação das bibliotecas
 import os
 import ast
 import re
@@ -12,7 +11,7 @@ from langchain_google_vertexai import ChatVertexAI
 
 from context_layer import GraphRAGBuilder
 
-app = FastAPI(title="Gerente Orquestrador IA - V4.2 (Dual-Stack Dev: QA + Advanced Hybrid AppSec)")
+app = FastAPI(title="Gerente Orquestrador IA - V4.3 (Zero-Trust DevSecOps)")
 
 # ==========================================
 # 1. A PRANCHETA DE TRABALHO (ESTADO)
@@ -105,7 +104,7 @@ class FrontendSecurityScanner:
             self.vulnerabilidades.append("🛑 [A03:2021-Injection (Frontend)] Uso de eval() ou setTimeout com strings.")
         if re.search(r'(localStorage|sessionStorage)\.setItem\s*\(', code):
             if any(key in code.upper() for key in ["TOKEN", "JWT", "PASSWORD", "SENHA", "CREDENTIAL", "SECRET"]):
-                self.vulnerabilidades.append("⚠️ [A04:2021-Design Inseguro] Uso de web storage para persistência confidencial.")
+                self.vulnerabilidades.append("⚠️ [A04:2021-Design Inseguro] Uso de web storage para persistência confidencial. Evite expor tokens JWT aqui.")
         if "bypassSecurityTrust" in code:
             self.vulnerabilidades.append("⚠️ [A03:2021-Injection (Frontend)] Desativação intencional de blindagem XSS.")
         
@@ -174,10 +173,12 @@ def departamento_backend(estado: Prancheta):
     return {"codigo_backend": resposta.content}
 
 def departamento_frontend(estado: Prancheta):
+    # Alteração: Instrução defensiva para evitar o uso de localStorage
     prompt = f"""Você é um Dev Frontend Sênior React. 
     Plano: {estado['plano_tecnico']}
     Backend: {estado['codigo_backend']}
     Correções: {estado.get('comentarios_revisor', 'Nenhum.')}
+    Atenção: NÃO use localStorage ou sessionStorage para armazenar tokens JWT, pois isso viola as políticas de segurança. Opte por variáveis de estado em memória (React State) ou instrua o uso de cookies HTTP-Only no backend.
     Escreva APENAS o código interativo."""
     resposta = get_llm().invoke(prompt)
     return {"codigo_frontend": resposta.content}
@@ -197,10 +198,13 @@ def departamento_revisor(estado: Prancheta):
     Testes QA: {estado['testes_gerados']}
     Scanner SAST: {analise_hibrida}
 
+    REGRA ZERO-TRUST:
+    Se o Scanner SAST indicar QUALQUER aviso (seja 🛑 ou ⚠️), você DEVE reprovar o código e orientar a correção.
     Se perfeitamente seguro e sem falhas no SAST, responda APENAS 'APROVADO'. Senão, explique as falhas."""
     resposta = get_llm().invoke(prompt).content
 
-    if "APROVADO" in resposta.upper() and "🛑" not in analise_hibrida:
+    # Alteração: Bloqueio rigoroso de vulnerabilidades amarelas (Warnings)
+    if "APROVADO" in resposta.upper() and "🛑" not in analise_hibrida and "⚠️" not in analise_hibrida:
         return {"aprovado": True, "comentarios_revisor": "Tudo certo.", "analise_estatica_ast": analise_hibrida}
     return {"aprovado": False, "comentarios_revisor": resposta, "analise_estatica_ast": analise_hibrida}
 
@@ -232,7 +236,7 @@ class TarefaRequest(BaseModel):
 
 @app.get("/")
 def health_check():
-    return {"status": "ok", "servico": "Gerente Orquestrador IA v4.2 - Advanced Dual-Stack DevSecOps"}
+    return {"status": "ok", "servico": "Gerente Orquestrador IA v4.3 (Zero-Trust)"}
 
 @app.post("/executar")
 def executar_fluxo(requisicao: TarefaRequest):
@@ -244,7 +248,8 @@ def executar_fluxo(requisicao: TarefaRequest):
             "codigo_frontend": resultado.get("codigo_frontend"),
             "testes_gerados": resultado.get("testes_gerados"),
             "analise_ast": resultado.get("analise_estatica_ast"),
-            "aprovado": resultado.get("aprovado")
+            "aprovado": resultado.get("aprovado"),
+            "relatorio_final_revisor": resultado.get("comentarios_revisor") # Alteração: Expõe o comentário
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -252,11 +257,11 @@ def executar_fluxo(requisicao: TarefaRequest):
 @app.post("/revisar_pr")
 def revisar_pr_direto(requisicao: TarefaRequest):
     """
-    O grande diferencial: Auditoria direta de Pull Requests no GitHub
+    Auditoria direta de Pull Requests no GitHub
     """
     token = os.environ.get("GITHUB_TOKEN")
     if not token or not requisicao.numero_pr:
-        raise HTTPException(status_code=400, detail="Token do GitHub ou número do PR ausentes na requisição ou no ambiente.")
+        raise HTTPException(status_code=400, detail="Token do GitHub ou número do PR ausentes.")
     
     try:
         url_diff = f"https://api.github.com/repos/{requisicao.repositorio}/pulls/{requisicao.numero_pr}"
@@ -268,14 +273,13 @@ def revisar_pr_direto(requisicao: TarefaRequest):
              
         codigo_alterado = resposta_diff.text
 
-        # Separa código Python para o AST Scanner
         linhas_python = [line for line in codigo_alterado.split('\n') if not line.startswith('-') and (line.endswith('.py') or any(k in line for k in ['def ', 'import ', 'class ']))]
         codigo_python_sozinho = "\n".join(linhas_python)
 
         analise_hibrida = executar_analise_estatica_hibrida(codigo_python_sozinho, codigo_alterado)
 
         prompt_revisor_avancado = f"""Você é um Inspetor de Segurança Sênior (AppSec).
-        Analise o 'git diff' recebido, buscando furos no backend (OWASP Top 10) e vulnerabilidades no frontend.
+        Analise o 'git diff' recebido.
 
         Diff:
         {codigo_alterado}
@@ -283,23 +287,25 @@ def revisar_pr_direto(requisicao: TarefaRequest):
         SAST Scanner:
         {analise_hibrida}
 
-        Se perfeito, responda 'APROVADO'. Se falho, aponte os erros e a correção."""
+        REGRA ZERO-TRUST:
+        Reprove sumariamente se o SAST Scanner apontar qualquer vulnerabilidade grave (🛑) ou aviso de design inseguro (⚠️).
+        Responda 'APROVADO' apenas se o código estiver perfeitamente blindado. Senão, explique as correções."""
 
         parecer = get_llm().invoke(prompt_revisor_avancado).content
-        aprovado = "APROVADO" in parecer.upper() and "🛑" not in analise_hibrida
+        aprovado = "APROVADO" in parecer.upper() and "🛑" not in analise_hibrida and "⚠️" not in analise_hibrida
 
         prompt_qa = f"Crie testes pytest para o diff: {codigo_alterado}"
         testes_sugeridos = get_llm().invoke(prompt_qa).content
 
         url_comentario = f"https://api.github.com/repos/{requisicao.repositorio}/issues/{requisicao.numero_pr}/comments"
         cabecalhos_comentario = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
-        icone = "✅ APROVADO" if aprovado else "❌ FALHAS DE SEGURANÇA ENCONTRADAS"
+        icone = "✅ APROVADO" if aprovado else "❌ REPROVADO PELO APPSEC"
 
         comentario_final = (
-            f"### 🕵️ Auditoria AppSec Avançada\n**Status:** {icone}\n\n"
+            f"### 🕵️ Auditoria AppSec (Zero-Trust)\n**Status:** {icone}\n\n"
             f"**Análise Estática (SAST):\n{analise_hibrida}\n\n"
-            f"**Análise de Segurança (IA):\n{parecer}\n\n"
-            f"---\n### 🧪 Sugestão de Testes Unitários Automáticos (QA)\n{testes_sugeridos}"
+            f"**Parecer Técnico (IA):\n{parecer}\n\n"
+            f"---\n### 🧪 Sugestão de Testes Automáticos\n{testes_sugeridos}"
         )
 
         resp = requests.post(url_comentario, json={"body": comentario_final}, headers=cabecalhos_comentario)
